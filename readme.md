@@ -1,8 +1,8 @@
-# crunghc: replacement for runghc with automatic caching
+# crunghc: runghc replacement with automatic caching
 
 ## Usage
 
- crunghc <script>.hs <args...>
+ crunghc \<script\>.hs \<args...\>
 
 When a script is first run with crunghc, it is compiled to an executable
 file and stored in a cache directory (~/.crunghc/ on Unix).
