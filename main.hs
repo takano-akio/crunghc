@@ -40,6 +40,7 @@ parseCmdline args = case span ("-" `isPrefixOf`) args of
     }
   _ -> Left "No file is given"
 
+-- | Return the directory to store cached files.
 chooseCacheDir :: Cmdline -> IO FilePath
 chooseCacheDir cmdline = do
   appDir <- getAppUserDataDirectory "crunghc"
@@ -47,6 +48,7 @@ chooseCacheDir cmdline = do
   canonicalScriptPath <- canonicalizePath $ cmdScriptPath cmdline
   return $ appDir </> ghcVersion </> hashToDirname canonicalScriptPath
 
+-- | Does the script need to be recompiled?
 testRecompilationNeeded :: Cmdline -> FilePath -> IO Bool
 testRecompilationNeeded cmdline cachedir = fmap isNothing $ runMaybeT $ do
   exeModTime <- checkIOError $
@@ -68,11 +70,13 @@ testRecompilationNeeded cmdline cachedir = fmap isNothing $ runMaybeT $ do
         modTime <- checkIOError $ getModificationTime srcPath
         guard $ exeModTime > modTime
 
+-- | Compile the script and populate the cache directory.
 recompile :: Cmdline -> FilePath -> IO ()
 recompile cmdline cachedir = do
   createDirectoryIfMissing True $ cachedir </> "build"
   runGhc $ ghcArgs ["-M", "-dep-makefile", cachedir </> "deps"]
-  runGhc $ ghcArgs ["-hidir", builddir, "-odir", builddir, "-o", cachedir </> "cached.exe"]
+  runGhc $ ghcArgs
+    ["-hidir", builddir, "-odir", builddir, "-o", cachedir </> "cached.exe"]
   wdir <- getCurrentDirectory
   writeFile (cachedir </> "wdir") wdir
   where
@@ -84,6 +88,7 @@ recompile cmdline cachedir = do
         ExitSuccess -> return ()
         ExitFailure{} -> die err
 
+-- | Run the cached executable.
 runCached :: Cmdline -> FilePath -> IO ()
 runCached cmdline cachedir =
   exitWith =<< rawSystem (cachedir </> "cached.exe") (cmdScriptArgs cmdline)
@@ -110,7 +115,8 @@ checkIOError action = MaybeT $
   (Just <$> action) `E.catch` \e -> const (return Nothing) (e::IOError)
 
 hashToDirname :: String -> FilePath
-hashToDirname = SHA.showDigest . SHA.sha1 . SL.fromStrict . T.encodeUtf8 . T.pack
+hashToDirname
+  = SHA.showDigest . SHA.sha1 . SL.fromStrict . T.encodeUtf8 . T.pack
 
 fromRightIO :: Either String a -> IO a
 fromRightIO = either die return
