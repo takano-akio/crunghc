@@ -79,7 +79,10 @@ recompile cmdline cachedir canonicalScriptPath = do
   createDirectoryIfMissing True $ cachedir </> "build"
   runGhc $ ghcArgs ["-M", "-dep-makefile", cachedir </> "deps"]
   runGhc $ ghcArgs
-    ["-hidir", builddir, "-odir", builddir, "-o", cachedir </> "cached.exe"]
+    [ "-hidir", builddir, "-odir", builddir
+    , "-threaded"
+    , "-o", cachedir </> "cached.exe"
+    ]
   wdir <- getCurrentDirectory
   writeFile (cachedir </> "wdir") wdir
   writeFile (cachedir </> "path") canonicalScriptPath
