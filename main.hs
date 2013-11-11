@@ -26,9 +26,10 @@ data Cmdline = Cmdline
 main :: IO ()
 main = do
   cmdline <- fromRightIO . parseCmdline =<< getArgs
-  cachedir <- chooseCacheDir cmdline
-  needRecomp <- testRecompilationNeeded cmdline cachedir
-  when needRecomp $ recompile cmdline cachedir
+  canonicalScriptPath <- canonicalizePath $ cmdScriptPath cmdline
+  cachedir <- chooseCacheDir canonicalScriptPath
+  needRecomp <- testRecompilationNeeded cmdline cachedir canonicalScriptPath
+  when needRecomp $ recompile cmdline cachedir canonicalScriptPath
   runCached cmdline cachedir
 
 parseCmdline :: [String] -> Either String Cmdline
@@ -41,16 +42,18 @@ parseCmdline args = case span ("-" `isPrefixOf`) args of
   _ -> Left "No file is given"
 
 -- | Return the directory to store cached files.
-chooseCacheDir :: Cmdline -> IO FilePath
-chooseCacheDir cmdline = do
+chooseCacheDir :: FilePath -> IO FilePath
+chooseCacheDir canonicalScriptPath = do
   appDir <- getAppUserDataDirectory "crunghc"
   ghcVersion <- filter (/='\n') <$> readProcess "ghc" ["--numeric-version"] ""
-  canonicalScriptPath <- canonicalizePath $ cmdScriptPath cmdline
   return $ appDir </> ghcVersion </> hashToDirname canonicalScriptPath
 
 -- | Does the script need to be recompiled?
-testRecompilationNeeded :: Cmdline -> FilePath -> IO Bool
-testRecompilationNeeded cmdline cachedir = fmap isNothing $ runMaybeT $ do
+testRecompilationNeeded :: Cmdline -> FilePath -> FilePath -> IO Bool
+testRecompilationNeeded cmdline cachedir canonicalScriptPath
+    = fmap isNothing $ runMaybeT $ do
+  recordedPath <- checkIOError $ readFile $ cachedir </> "path"
+  guard $ canonicalScriptPath == recordedPath
   exeModTime <- checkIOError $
     getModificationTime $ cachedir </> "cached.exe"
   deps <- readDependencies $ cachedir </> "deps"
@@ -71,14 +74,15 @@ testRecompilationNeeded cmdline cachedir = fmap isNothing $ runMaybeT $ do
         guard $ exeModTime > modTime
 
 -- | Compile the script and populate the cache directory.
-recompile :: Cmdline -> FilePath -> IO ()
-recompile cmdline cachedir = do
+recompile :: Cmdline -> FilePath -> FilePath -> IO ()
+recompile cmdline cachedir canonicalScriptPath = do
   createDirectoryIfMissing True $ cachedir </> "build"
   runGhc $ ghcArgs ["-M", "-dep-makefile", cachedir </> "deps"]
   runGhc $ ghcArgs
     ["-hidir", builddir, "-odir", builddir, "-o", cachedir </> "cached.exe"]
   wdir <- getCurrentDirectory
   writeFile (cachedir </> "wdir") wdir
+  writeFile (cachedir </> "path") canonicalScriptPath
   where
     ghcArgs flags = cmdGhcFlags cmdline ++ flags ++ [cmdScriptPath cmdline]
     builddir = cachedir </> "build"
