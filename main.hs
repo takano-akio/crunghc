@@ -17,7 +17,7 @@ import System.FilePath
 import System.IO
 import System.Process
 
-data Cmdline = Cmdline
+data Config = Config
   { cmdGhcFlags :: [String]
   , cmdScriptPath :: FilePath
   , cmdScriptArgs :: [String]
@@ -25,16 +25,16 @@ data Cmdline = Cmdline
 
 main :: IO ()
 main = do
-  cmdline <- fromRightIO . parseCmdline =<< getArgs
-  canonicalScriptPath <- canonicalizePath $ cmdScriptPath cmdline
+  config <- fromRightIO . parseConfig =<< getArgs
+  canonicalScriptPath <- canonicalizePath $ cmdScriptPath config
   cachedir <- chooseCacheDir canonicalScriptPath
-  needRecomp <- testRecompilationNeeded cmdline cachedir canonicalScriptPath
-  when needRecomp $ recompile cmdline cachedir canonicalScriptPath
-  runCached cmdline cachedir
+  needRecomp <- testRecompilationNeeded config cachedir canonicalScriptPath
+  when needRecomp $ recompile config cachedir canonicalScriptPath
+  runCached config cachedir
 
-parseCmdline :: [String] -> Either String Cmdline
-parseCmdline args = case span ("-" `isPrefixOf`) args of
-  (flags, path:scriptArgs) -> Right Cmdline
+parseConfig :: [String] -> Either String Config
+parseConfig args = case span ("-" `isPrefixOf`) args of
+  (flags, path:scriptArgs) -> Right Config
     { cmdGhcFlags = flags
     , cmdScriptPath = path
     , cmdScriptArgs = scriptArgs
@@ -49,8 +49,8 @@ chooseCacheDir canonicalScriptPath = do
   return $ appDir </> ghcVersion </> hashToDirname canonicalScriptPath
 
 -- | Does the script need to be recompiled?
-testRecompilationNeeded :: Cmdline -> FilePath -> FilePath -> IO Bool
-testRecompilationNeeded cmdline cachedir canonicalScriptPath
+testRecompilationNeeded :: Config -> FilePath -> FilePath -> IO Bool
+testRecompilationNeeded config cachedir canonicalScriptPath
     = fmap isNothing $ runMaybeT $ do
   recordedPath <- checkIOError $ readFile $ cachedir </> "path"
   guard $ canonicalScriptPath == recordedPath
@@ -60,7 +60,7 @@ testRecompilationNeeded cmdline cachedir canonicalScriptPath
   if length deps == 1
     then do -- Single-file program
       scriptModTime <- checkIOError $ getModificationTime $
-        cmdScriptPath cmdline
+        cmdScriptPath config
       guard $ exeModTime > scriptModTime
     else do
       -- Make sure that the working directory is the same as when the cache
@@ -74,8 +74,8 @@ testRecompilationNeeded cmdline cachedir canonicalScriptPath
         guard $ exeModTime > modTime
 
 -- | Compile the script and populate the cache directory.
-recompile :: Cmdline -> FilePath -> FilePath -> IO ()
-recompile cmdline cachedir canonicalScriptPath = do
+recompile :: Config -> FilePath -> FilePath -> IO ()
+recompile config cachedir canonicalScriptPath = do
   createDirectoryIfMissing True $ cachedir </> "build"
   runGhc $ ghcArgs ["-M", "-dep-makefile", cachedir </> "deps"]
   runGhc $ ghcArgs
@@ -87,7 +87,7 @@ recompile cmdline cachedir canonicalScriptPath = do
   writeFile (cachedir </> "wdir") wdir
   writeFile (cachedir </> "path") canonicalScriptPath
   where
-    ghcArgs flags = cmdGhcFlags cmdline ++ flags ++ [cmdScriptPath cmdline]
+    ghcArgs flags = cmdGhcFlags config ++ flags ++ [cmdScriptPath config]
     builddir = cachedir </> "build"
     runGhc args = do
       (exitCode, _, err) <- readProcessWithExitCode "ghc" args ""
@@ -96,9 +96,9 @@ recompile cmdline cachedir canonicalScriptPath = do
         ExitFailure{} -> die err
 
 -- | Run the cached executable.
-runCached :: Cmdline -> FilePath -> IO ()
-runCached cmdline cachedir =
-  exitWith =<< rawSystem (cachedir </> "cached.exe") (cmdScriptArgs cmdline)
+runCached :: Config -> FilePath -> IO ()
+runCached config cachedir =
+  exitWith =<< rawSystem (cachedir </> "cached.exe") (cmdScriptArgs config)
 
 readDependencies :: FilePath -> MaybeT IO [FilePath]
 readDependencies depFile = do
