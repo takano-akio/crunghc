@@ -1,4 +1,6 @@
-# crunghc: runghc replacement with automatic caching
+# crunghc
+
+A runghc replacement with automatic caching
 
 ## Usage
 
@@ -6,4 +8,4 @@
 
 If this is the first time \<script\>.hs is run, crunghc compiles it to an
 executable file and stores in a cache directory (~/.crunghc/ on Unix).
-Next time, it will automatically use the cached version.
+Next time it is run, the cached version will be used.
