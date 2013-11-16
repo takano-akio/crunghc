@@ -23,14 +23,21 @@ data Config = Config
   , cmdScriptArgs :: [String]
   }
 
+data CachePlan = CP
+  { cpCachedir :: FilePath
+  , cpStrategy :: CacheStrategy
+  }
+
+data CacheStrategy
+  = HashPath FilePath
+
 main :: IO ()
 main = do
   config <- fromRightIO . parseConfig =<< getArgs
-  canonicalScriptPath <- canonicalizePath $ cmdScriptPath config
-  cachedir <- chooseCacheDir canonicalScriptPath
-  needRecomp <- testRecompilationNeeded config cachedir canonicalScriptPath
-  when needRecomp $ recompile config cachedir canonicalScriptPath
-  runCached config cachedir
+  plan <- chooseCachePlan config
+  needRecomp <- testRecompilationNeeded config plan
+  when needRecomp $ recompile config plan
+  runCached config plan
 
 parseConfig :: [String] -> Either String Config
 parseConfig args = case span ("-" `isPrefixOf`) args of
@@ -41,19 +48,25 @@ parseConfig args = case span ("-" `isPrefixOf`) args of
     }
   _ -> Left "No file is given"
 
--- | Return the directory to store cached files.
-chooseCacheDir :: FilePath -> IO FilePath
-chooseCacheDir canonicalScriptPath = do
+-- | Decide where to store the cache, and which strategy to use.
+chooseCachePlan :: Config -> IO CachePlan
+chooseCachePlan config = do
+  canonicalScriptPath <- canonicalizePath $ cmdScriptPath config
   appDir <- getAppUserDataDirectory "crunghc"
   ghcVersion <- filter (/='\n') <$> readProcess "ghc" ["--numeric-version"] ""
-  return $ appDir </> ghcVersion </> hashToDirname canonicalScriptPath
+  return $ CP
+    { cpCachedir = appDir </> ghcVersion </> hashToDirname canonicalScriptPath
+    , cpStrategy = HashPath canonicalScriptPath
+    }
 
 -- | Does the script need to be recompiled?
-testRecompilationNeeded :: Config -> FilePath -> FilePath -> IO Bool
-testRecompilationNeeded config cachedir canonicalScriptPath
+testRecompilationNeeded :: Config -> CachePlan -> IO Bool
+testRecompilationNeeded config CP{cpCachedir=cachedir, cpStrategy=strat}
     = fmap isNothing $ runMaybeT $ do
-  recordedPath <- checkIOError $ readFile $ cachedir </> "path"
-  guard $ canonicalScriptPath == recordedPath
+  case strat of
+    HashPath canonicalScriptPath -> do
+      recordedPath <- checkIOError $ readFile $ cachedir </> "path"
+      guard $ canonicalScriptPath == recordedPath
   exeModTime <- checkIOError $
     getModificationTime $ cachedir </> "cached.exe"
   deps <- readDependencies $ cachedir </> "deps"
@@ -74,8 +87,8 @@ testRecompilationNeeded config cachedir canonicalScriptPath
         guard $ exeModTime > modTime
 
 -- | Compile the script and populate the cache directory.
-recompile :: Config -> FilePath -> FilePath -> IO ()
-recompile config cachedir canonicalScriptPath = do
+recompile :: Config -> CachePlan -> IO ()
+recompile config CP{cpCachedir=cachedir, cpStrategy=strat} = do
   createDirectoryIfMissing True $ cachedir </> "build"
   runGhc $ ghcArgs ["-M", "-dep-makefile", cachedir </> "deps"]
   runGhc $ ghcArgs
@@ -85,7 +98,9 @@ recompile config cachedir canonicalScriptPath = do
     ]
   wdir <- getCurrentDirectory
   writeFile (cachedir </> "wdir") wdir
-  writeFile (cachedir </> "path") canonicalScriptPath
+  case strat of
+    HashPath canonicalScriptPath ->
+      writeFile (cachedir </> "path") canonicalScriptPath
   where
     ghcArgs flags = cmdGhcFlags config ++ flags ++ [cmdScriptPath config]
     builddir = cachedir </> "build"
@@ -96,9 +111,9 @@ recompile config cachedir canonicalScriptPath = do
         ExitFailure{} -> die err
 
 -- | Run the cached executable.
-runCached :: Config -> FilePath -> IO ()
-runCached config cachedir =
-  exitWith =<< rawSystem (cachedir </> "cached.exe") (cmdScriptArgs config)
+runCached :: Config -> CachePlan -> IO ()
+runCached config plan =
+  exitWith =<< rawSystem (cpCachedir plan </> "cached.exe") (cmdScriptArgs config)
 
 readDependencies :: FilePath -> MaybeT IO [FilePath]
 readDependencies depFile = do
