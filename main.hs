@@ -6,10 +6,12 @@ import Control.Monad.Trans.Maybe
 import Data.Char
 import qualified Data.Digest.Pure.SHA as SHA
 import Data.List
-import qualified Data.ByteString.Lazy as SL
+import qualified Data.ByteString as S
+import qualified Data.ByteString.Lazy as L
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
 import Data.Maybe
+import Data.Monoid
 import System.Directory
 import System.Environment
 import System.Exit
@@ -30,6 +32,9 @@ data CachePlan = CP
 
 data CacheStrategy
   = HashPath FilePath
+  | HashContent
+      S.ByteString -- ^ 0-separated ghc args
+      S.ByteString -- ^ content
 
 main :: IO ()
 main = do
@@ -51,13 +56,33 @@ parseConfig args = case span ("-" `isPrefixOf`) args of
 -- | Decide where to store the cache, and which strategy to use.
 chooseCachePlan :: Config -> IO CachePlan
 chooseCachePlan config = do
-  canonicalScriptPath <- canonicalizePath $ cmdScriptPath config
+  contentHead <- readPrefix (contentHashThreshold + 1) $ cmdScriptPath config
+  let contentAndGhcArgs = contentHead <> packedGhcArgs
+  (toHash, strat) <- if S.length contentAndGhcArgs <= contentHashThreshold
+    then return (contentAndGhcArgs, HashContent packedGhcArgs contentHead)
+    else do
+      canonicalScriptPath <- canonicalizePath $ cmdScriptPath config
+      return
+        ( T.encodeUtf8 $ T.pack canonicalScriptPath
+        , HashPath canonicalScriptPath
+        )
   appDir <- getAppUserDataDirectory "crunghc"
   ghcVersion <- filter (/='\n') <$> readProcess "ghc" ["--numeric-version"] ""
   return $ CP
-    { cpCachedir = appDir </> ghcVersion </> hashToDirname canonicalScriptPath
-    , cpStrategy = HashPath canonicalScriptPath
+    { cpCachedir = appDir </> ghcVersion </> hashToDirname toHash
+    , cpStrategy = strat
     }
+  where
+    -- | Use filepath hashing if the total size of the ghc command line and the
+    -- script itself exceeds this value. In particular it should be large enough
+    -- to allow the boilerplate Setup.hs to be content-hashed.
+    contentHashThreshold = 50
+
+    packedGhcArgs = S.intercalate (S.singleton 0) $
+      map (T.encodeUtf8 . T.pack) $ cmdGhcFlags config
+
+readPrefix :: Int -> FilePath -> IO S.ByteString
+readPrefix n path = withFile path ReadMode $ \h -> S.hGet h n
 
 -- | Does the script need to be recompiled?
 testRecompilationNeeded :: Config -> CachePlan -> IO Bool
@@ -65,8 +90,11 @@ testRecompilationNeeded config CP{cpCachedir=cachedir, cpStrategy=strat}
     = fmap isNothing $ runMaybeT $ do
   case strat of
     HashPath canonicalScriptPath -> do
-      recordedPath <- checkIOError $ readFile $ cachedir </> "path"
-      guard $ canonicalScriptPath == recordedPath
+      shouldEqual canonicalScriptPath $
+        readFile $ cachedir </> "path"
+    HashContent ghcArgs content -> do
+      shouldEqual ghcArgs $ S.readFile $ cachedir </> "ghc-args"
+      shouldEqual content $ S.readFile $ cachedir </> "content"
   exeModTime <- checkIOError $
     getModificationTime $ cachedir </> "cached.exe"
   deps <- readDependencies $ cachedir </> "deps"
@@ -85,13 +113,17 @@ testRecompilationNeeded config CP{cpCachedir=cachedir, cpStrategy=strat}
       forM_ deps $ \srcPath -> do
         modTime <- checkIOError $ getModificationTime srcPath
         guard $ exeModTime > modTime
+  where
+    shouldEqual val action = do
+      r <- checkIOError action
+      guard $ val == r
 
 -- | Compile the script and populate the cache directory.
 recompile :: Config -> CachePlan -> IO ()
 recompile config CP{cpCachedir=cachedir, cpStrategy=strat} = do
   createDirectoryIfMissing True $ cachedir </> "build"
-  runGhc $ ghcArgs ["-M", "-dep-makefile", cachedir </> "deps"]
-  runGhc $ ghcArgs
+  runGhc $ fullGhcArgs ["-M", "-dep-makefile", cachedir </> "deps"]
+  runGhc $ fullGhcArgs
     [ "-hidir", builddir, "-odir", builddir
     , "-threaded"
     , "-o", cachedir </> "cached.exe"
@@ -101,8 +133,11 @@ recompile config CP{cpCachedir=cachedir, cpStrategy=strat} = do
   case strat of
     HashPath canonicalScriptPath ->
       writeFile (cachedir </> "path") canonicalScriptPath
+    HashContent ghcArgs content -> do
+      S.writeFile (cachedir </> "ghc-args") ghcArgs
+      S.writeFile (cachedir </> "content") content
   where
-    ghcArgs flags = cmdGhcFlags config ++ flags ++ [cmdScriptPath config]
+    fullGhcArgs flags = cmdGhcFlags config ++ flags ++ [cmdScriptPath config]
     builddir = cachedir </> "build"
     runGhc args = do
       (exitCode, _, err) <- readProcessWithExitCode "ghc" args ""
@@ -136,9 +171,8 @@ checkIOError :: IO a -> MaybeT IO a
 checkIOError action = MaybeT $
   (Just <$> action) `E.catch` \e -> const (return Nothing) (e::IOError)
 
-hashToDirname :: String -> FilePath
-hashToDirname
-  = SHA.showDigest . SHA.sha1 . SL.fromStrict . T.encodeUtf8 . T.pack
+hashToDirname :: S.ByteString -> FilePath
+hashToDirname = SHA.showDigest . SHA.sha1 . L.fromStrict
 
 fromRightIO :: Either String a -> IO a
 fromRightIO = either die return
