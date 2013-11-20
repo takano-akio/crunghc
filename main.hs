@@ -172,7 +172,7 @@ checkIOError action = MaybeT $
   (Just <$> action) `E.catch` \e -> const (return Nothing) (e::IOError)
 
 hashToDirname :: S.ByteString -> FilePath
-hashToDirname = SHA.showDigest . SHA.sha1 . L.fromStrict
+hashToDirname = SHA.showDigest . SHA.sha1 . L.fromChunks . (:[])
 
 fromRightIO :: Either String a -> IO a
 fromRightIO = either die return
