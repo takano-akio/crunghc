@@ -3,20 +3,23 @@ import qualified Control.Exception as E
 import Control.Monad
 import Control.Monad.IO.Class
 import Control.Monad.Trans.Maybe
+import qualified Data.ByteString as S
+import qualified Data.ByteString.Lazy as L
 import Data.Char
 import qualified Data.Digest.Pure.SHA as SHA
 import Data.List
-import qualified Data.ByteString as S
-import qualified Data.ByteString.Lazy as L
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
+import Data.Time.Clock
 import Data.Maybe
 import Data.Monoid
 import System.Directory
 import System.Environment
 import System.Exit
+import System.FileLock
 import System.FilePath
 import System.IO
+import System.IO.Error
 import System.Process
 
 data Config = Config
@@ -40,9 +43,19 @@ main :: IO ()
 main = do
   config <- fromRightIO . parseConfig =<< getArgs
   plan <- chooseCachePlan config
-  needRecomp <- testRecompilationNeeded config plan
-  when needRecomp $ recompile config plan
-  runCached config plan
+  createDirectoryIfMissing True $ cpCachedir plan
+  (tempExeCopy, cleanup) <- withFileLock (lockfile plan) Exclusive $ \_ -> do
+    needRecomp <- testRecompilationNeeded config plan
+    when needRecomp $ recompile config plan
+
+    -- Here we make a copy of the cached executable, and run that copy.
+    -- This is needed for two reasons:
+    --
+    -- 1. we want to avoid the race condition where some other process replaces
+    --  the cached executable after we unlock it and before we execute it.
+    -- 2. on Windows you cannot replace an executable while it's running.
+    makeTemporaryExeCopy plan
+  runTemp config tempExeCopy `E.finally` cleanup
 
 parseConfig :: [String] -> Either String Config
 parseConfig args = case span ("-" `isPrefixOf`) args of
@@ -52,6 +65,9 @@ parseConfig args = case span ("-" `isPrefixOf`) args of
     , cmdScriptArgs = scriptArgs
     }
   _ -> Left "No file is given"
+
+lockfile :: CachePlan -> FilePath
+lockfile plan = cpCachedir plan </> "lock"
 
 -- | Decide where to store the cache, and which strategy to use.
 chooseCachePlan :: Config -> IO CachePlan
@@ -145,10 +161,36 @@ recompile config CP{cpCachedir=cachedir, cpStrategy=strat} = do
         ExitSuccess -> return ()
         ExitFailure{} -> die err
 
+-- | Create a temporary copy of the cached executable for exclusive use by
+-- this process. Return the path of the copy and a cleanup action.
+makeTemporaryExeCopy :: CachePlan -> IO (FilePath, IO ())
+makeTemporaryExeCopy plan = do
+  createDirectoryIfMissing True tempdir
+  mydir <- createFreshDirectoryIn tempdir
+  let tempPath = mydir </> "temp.exe"
+  copyFile (cpCachedir plan </> "cached.exe") tempPath
+  return (tempPath, removeDirectoryRecursive mydir)
+  where
+    tempdir = cpCachedir plan </> "temp"
+
+createFreshDirectoryIn :: FilePath -> IO FilePath
+createFreshDirectoryIn dir = loop =<< randomNumber
+  where
+    loop n = do
+      let fresh = dir </> show n
+      r <- E.tryJust (guard . isAlreadyExistsError) $ createDirectory fresh
+      case r of
+        Left{} -> loop $ n + 1
+        Right{} -> return fresh
+
+    randomNumber = do
+      tod <- utctDayTime <$> getCurrentTime
+      return $ flip mod (100000::Int) $
+        floor $ realToFrac tod * (1000000 :: Double)
+
 -- | Run the cached executable.
-runCached :: Config -> CachePlan -> IO ()
-runCached config plan =
-  exitWith =<< rawSystem (cpCachedir plan </> "cached.exe") (cmdScriptArgs config)
+runTemp :: Config -> FilePath -> IO ()
+runTemp config path = exitWith =<< rawSystem path (cmdScriptArgs config)
 
 readDependencies :: FilePath -> MaybeT IO [FilePath]
 readDependencies depFile = do
