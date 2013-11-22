@@ -150,6 +150,9 @@ recompile config CP{cpCachedir=cachedir, cpStrategy=strat} = do
     , "-threaded"
     , "-o", cachedir </> "cached.exe"
     ]
+  -- Try to strip it, but don't care if it fails.
+  void (rawSystem "strip" [cachedir </> "cached.exe"])
+    `E.catch` \e -> const (return ()) (e::E.IOException)
   wdir <- getCurrentDirectory
   writeFile (cachedir </> "wdir") wdir
   case strat of
