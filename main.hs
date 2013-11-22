@@ -1,3 +1,5 @@
+{-# LANGUAGE CPP #-}
+
 import Control.Applicative
 import qualified Control.Exception as E
 import Control.Monad
@@ -21,6 +23,10 @@ import System.FilePath
 import System.IO
 import System.IO.Error
 import System.Process
+
+#if USE_UNIX
+import System.Posix.Files (createLink)
+#endif
 
 data Config = Config
   { cmdGhcFlags :: [String]
@@ -161,17 +167,24 @@ recompile config CP{cpCachedir=cachedir, cpStrategy=strat} = do
         ExitSuccess -> return ()
         ExitFailure{} -> die err
 
--- | Create a temporary copy of the cached executable for exclusive use by
--- this process. Return the path of the copy and a cleanup action.
+-- | Create a temporary copy or hard link of the cached executable for
+-- exclusive use by this process. Return the path of the copy and a cleanup
+-- action.
 makeTemporaryExeCopy :: CachePlan -> IO (FilePath, IO ())
 makeTemporaryExeCopy plan = do
   createDirectoryIfMissing True tempdir
   mydir <- createFreshDirectoryIn tempdir
   let tempPath = mydir </> "temp.exe"
-  copyFile (cpCachedir plan </> "cached.exe") tempPath
+  linkOrCopy (cpCachedir plan </> "cached.exe") tempPath
   return (tempPath, removeDirectoryRecursive mydir)
   where
     tempdir = cpCachedir plan </> "temp"
+#if USE_UNIX
+    -- Use hard links if available, because they are much cheaper to create.
+    linkOrCopy = createLink
+#else
+    linkOrCopy = copyFile
+#endif
 
 createFreshDirectoryIn :: FilePath -> IO FilePath
 createFreshDirectoryIn dir = loop =<< randomNumber

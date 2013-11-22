@@ -24,3 +24,7 @@ executable crunghc
                        transformers >= 0.3, filelock >= 0.0, time >= 1.4
   -- hs-source-dirs:      
   default-language:    Haskell2010
+
+  if !os(windows)
+    build-depends:    unix
+    cpp-options:      -DUSE_UNIX
