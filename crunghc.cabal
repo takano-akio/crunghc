@@ -3,7 +3,7 @@
 
 name:                crunghc
 version:             0.0.0.0
-synopsis:            Replacement for runghc with automatic caching
+synopsis:            runghc replacement with transparent caching
 -- description:         
 license:             PublicDomain
 license-file:        LICENSE

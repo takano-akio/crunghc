@@ -1,6 +1,6 @@
 # crunghc
 
-A runghc replacement with automatic caching
+A runghc replacement with transparent caching
 
 ## Usage
 
