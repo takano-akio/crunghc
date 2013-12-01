@@ -2,9 +2,12 @@
 -- documentation, see http://haskell.org/cabal/users-guide/
 
 name:                crunghc
-version:             0.0.0.0
-synopsis:            runghc replacement with transparent caching
--- description:         
+version:             0.1.0.0
+synopsis:            A runghc replacement with transparent caching
+description:         crunghc is a program that acts like runghc. When it
+                     executes a Haskell script, it automatically stores a
+                     compiled cache of the script to the disk, so that the
+                     compilation overhead can be avoided in subsequent runs.
 license:             PublicDomain
 license-file:        LICENSE
 author:              Takano Akio
