@@ -1,4 +1,5 @@
 {-# LANGUAGE CPP #-}
+{-# LANGUAGE DeriveDataTypeable #-}
 
 import Control.Applicative
 import qualified Control.Exception as E
@@ -10,11 +11,12 @@ import qualified Data.ByteString.Lazy as L
 import Data.Char
 import qualified Data.Digest.Pure.SHA as SHA
 import Data.List
+import Data.Maybe
+import Data.Monoid
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
 import Data.Time.Clock
-import Data.Maybe
-import Data.Monoid
+import Data.Typeable
 import System.Directory
 import System.Environment
 import System.Exit
@@ -25,7 +27,9 @@ import System.IO.Error
 import System.Process
 
 #if USE_UNIX
+import Control.Concurrent (myThreadId)
 import System.Posix.Files (createLink)
+import qualified System.Posix.Signals as Sig
 #endif
 
 data Config = Config
@@ -47,6 +51,7 @@ data CacheStrategy
 
 main :: IO ()
 main = do
+  installSignalHandlers
   config <- fromRightIO . parseConfig =<< getArgs
   plan <- chooseCachePlan config
   createDirectoryIfMissing True $ cpCachedir plan
@@ -54,6 +59,7 @@ main = do
     (prepareExecutable config plan)
     snd -- cleanup
     (runTemp config . fst)
+  `E.catch` \(KilledBySignal _) -> exitFailure
 
 -- | Prepare a cached executable by rebuilding it if necessary.
 -- Return a fresh copy or link of the executable and a cleanup action.
@@ -230,6 +236,37 @@ extractDependency ln
     looksLikeSourceFile =
       ".hs" `isSuffixOf` ln ||
       ".lhs" `isSuffixOf` ln
+
+----------
+-- signals
+
+newtype KilledBySignal = KilledBySignal Signal
+  deriving (Show, Typeable)
+
+instance E.Exception KilledBySignal
+
+#if USE_UNIX
+type Signal = Sig.Signal
+#else
+type Signal = ()
+#endif
+
+-- | Install signal handlers that turn signals into KilledBySignal exceptions.
+installSignalHandlers :: IO ()
+#if USE_UNIX
+installSignalHandlers = do
+  tid <- myThreadId
+  forM_ [Sig.softwareTermination] $ \sig ->
+    void $ Sig.installHandler sig (handler tid sig) Nothing
+  where
+    handler tid sig = Sig.Catch $ do
+      E.throwTo tid $ KilledBySignal sig
+#else
+installSignalHandlers = return ()
+#endif
+
+------------
+-- utilities
 
 takeWhileEnd :: (a -> Bool) -> [a] -> [a]
 takeWhileEnd p = reverse . takeWhile p . reverse
