@@ -50,7 +50,17 @@ main = do
   config <- fromRightIO . parseConfig =<< getArgs
   plan <- chooseCachePlan config
   createDirectoryIfMissing True $ cpCachedir plan
-  (tempExeCopy, cleanup) <- withFileLock (lockfile plan) Exclusive $ \_ -> do
+  E.bracket
+    (prepareExecutable config plan)
+    snd -- cleanup
+    (runTemp config . fst)
+
+-- | Prepare a cached executable by rebuilding it if necessary.
+-- Return a fresh copy or link of the executable and a cleanup action.
+prepareExecutable
+  :: Config -> CachePlan -> IO (FilePath, IO ())
+prepareExecutable config plan =
+  withFileLock (lockfile plan) Exclusive $ \_ -> do
     needRecomp <- testRecompilationNeeded config plan
     when needRecomp $ recompile config plan
 
@@ -61,7 +71,6 @@ main = do
     --  the cached executable after we unlock it and before we execute it.
     -- 2. on Windows you cannot replace an executable while it's running.
     makeTemporaryExeCopy plan
-  runTemp config tempExeCopy `E.finally` cleanup
 
 parseConfig :: [String] -> Either String Config
 parseConfig args = case span ("-" `isPrefixOf`) args of
