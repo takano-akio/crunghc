@@ -2,7 +2,7 @@
 -- documentation, see http://haskell.org/cabal/users-guide/
 
 name:                crunghc
-version:             0.1.1.0
+version:             0.1.1.1
 synopsis:            A runghc replacement with transparent caching
 description:         crunghc is a program that acts like runghc. When it
                      executes a Haskell script, it automatically stores a
