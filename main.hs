@@ -159,7 +159,11 @@ testRecompilationNeeded config CP{cpCachedir=cachedir, cpStrategy=strat}
 recompile :: Config -> CachePlan -> IO ()
 recompile config CP{cpCachedir=cachedir, cpStrategy=strat} = do
   createDirectoryIfMissing True $ cachedir </> "build"
-  runGhc $ fullGhcArgs ["-M", "-dep-makefile", cachedir </> "deps"]
+  runGhc $ fullGhcArgs
+    [ "-M"
+    , "-dep-makefile", cachedir </> "deps"
+    , "-dep-suffix", ""
+    ]
   runGhc $ fullGhcArgs
     [ "-hidir", builddir, "-odir", builddir
     , "-threaded"
